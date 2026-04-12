@@ -1,0 +1,280 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <map>
+#include <fstream>
+#include <algorithm>
+#include <iomanip>
+
+using namespace std;
+
+// ==========================================
+// 1. 数据模型层 (Data Models)
+// ==========================================
+struct Book {
+    string id;          // 书号
+    string title;       // 书名
+    string author;      // 作者
+    int totalStock;     // 总库存量
+    int currentStock;   // 现存量
+    int borrowCount;    // 历史被借阅次数（用于推荐算法）
+};
+
+struct BorrowRecord {
+    string userId;      // 学号/用户ID
+    string bookId;      // 借阅的书号
+    string borrowDate;  // 借阅日期
+};
+
+// ==========================================
+// 2. 后端逻辑层 (Backend Logic)
+// ==========================================
+class LibraryBackend {
+private:
+    vector<Book> books;                 // 图书主线性表
+    map<string, int> bookIndexMap;      // 【核心数据结构】：书号索引表，提高查找效率，映射书号到vector索引
+    vector<BorrowRecord> historyRecords;// 借阅历史记录
+
+    // 更新索引表
+    void updateIndex() {
+        bookIndexMap.clear();
+        for (int i = 0; i < books.size(); ++i) {
+            bookIndexMap[books[i].id] = i;
+        }
+    }
+
+public:
+    // 初始化时加载数据
+    LibraryBackend() { loadFromFile(); }
+    ~LibraryBackend() { saveToFile(); }
+
+    // --- 管理员后端接口 ---
+    bool addBook(const Book& b) {
+        if (bookIndexMap.find(b.id) != bookIndexMap.end()) return false; // 已存在
+        books.push_back(b);
+        updateIndex();
+        saveToFile();
+        return true;
+    }
+
+    bool modifyBook(const string& id, int addStock) {
+        if (bookIndexMap.find(id) == bookIndexMap.end()) return false;
+        int idx = bookIndexMap[id];
+        books[idx].totalStock += addStock;
+        books[idx].currentStock += addStock;
+        saveToFile();
+        return true;
+    }
+
+    // --- 学生后端接口 ---
+    Book* searchBook(const string& id) {
+        // 利用索引表实现 O(1) 或 O(logN) 的快速查找
+        if (bookIndexMap.find(id) != bookIndexMap.end()) {
+            return &books[bookIndexMap[id]];
+        }
+        return nullptr;
+    }
+
+    bool borrowBook(const string& userId, const string& bookId, const string& date) {
+        Book* b = searchBook(bookId);
+        if (b && b->currentStock > 0) {
+            b->currentStock--;
+            b->borrowCount++; // 增加热度
+            historyRecords.push_back({ userId, bookId, date });
+            saveToFile();
+            return true;
+        }
+        return false;
+    }
+
+    bool returnBook(const string& userId, const string& bookId) {
+        Book* b = searchBook(bookId);
+        if (b && b->currentStock < b->totalStock) {
+            b->currentStock++;
+            saveToFile();
+            return true;
+        }
+        return false;
+    }
+
+    // --- 【新功能】：图书推荐算法接口 ---
+    // 算法描述：基于被借阅次数（热度）进行降序排序，推荐Top N
+    vector<Book> getRecommendations(int topN = 3) {
+        vector<Book> recBooks = books;
+        // 使用 Lambda 表达式和快速排序的思想（std::sort）
+        sort(recBooks.begin(), recBooks.end(), [](const Book& a, const Book& b) {
+            return a.borrowCount > b.borrowCount;
+        });
+        
+        vector<Book> result;
+        for (int i = 0; i < min(topN, (int)recBooks.size()); ++i) {
+            if (recBooks[i].borrowCount > 0) { // 至少被借过一次才推荐
+                result.push_back(recBooks[i]);
+            }
+        }
+        return result;
+    }
+
+    // --- 文件持久化操作 (简易实现) ---
+    void saveToFile() {
+        ofstream out("books_data.txt");
+        for (const auto& b : books) {
+            out << b.id << " " << b.title << " " << b.author << " " 
+                << b.totalStock << " " << b.currentStock << " " << b.borrowCount << "\n";
+        }
+        out.close();
+    }
+
+    void loadFromFile() {
+        ifstream in("books_data.txt");
+        if (!in) return;
+        Book b;
+        books.clear();
+        while (in >> b.id >> b.title >> b.author >> b.totalStock >> b.currentStock >> b.borrowCount) {
+            books.push_back(b);
+        }
+        in.close();
+        updateIndex();
+    }
+};
+
+// ==========================================
+// 3. 前端交互层 (Frontend UI)
+// ==========================================
+class FrontendUI {
+private:
+    LibraryBackend backend;
+
+    void printHeader(const string& title) {
+        cout << "\n=========================================\n";
+        cout << "       " << title << "\n";
+        cout << "=========================================\n";
+    }
+
+public:
+    void run() {
+        int choice;
+        while (true) {
+            printHeader("图书管理系统 (当前模拟登录界面)");
+            cout << "1. 管理员端登录\n";
+            cout << "2. 学生端登录\n";
+            cout << "0. 退出系统\n";
+            cout << "请选择: ";
+            cin >> choice;
+
+            if (choice == 1) adminMenu();
+            else if (choice == 2) studentMenu();
+            else if (choice == 0) {
+                cout << "感谢使用，再见！\n";
+                break;
+            }
+        }
+    }
+
+    void adminMenu() {
+        int choice;
+        while (true) {
+            printHeader("管理员操作端");
+            cout << "1. 增加新图书\n";
+            cout << "2. 增加已有图书库存\n";
+            cout << "3. 查找图书信息\n";
+            cout << "0. 返回上级\n";
+            cout << "请选择: ";
+            cin >> choice;
+
+            if (choice == 0) break;
+            
+            if (choice == 1) {
+                Book b;
+                b.borrowCount = 0;
+                cout << "输入书号: "; cin >> b.id;
+                cout << "输入书名: "; cin >> b.title;
+                cout << "输入作者: "; cin >> b.author;
+                cout << "输入总库存: "; cin >> b.totalStock;
+                b.currentStock = b.totalStock;
+                
+                if (backend.addBook(b)) cout << ">> 添加成功！\n";
+                else cout << ">> 添加失败，书号已存在！\n";
+            }
+            else if (choice == 2) {
+                string id; int addCount;
+                cout << "输入书号: "; cin >> id;
+                cout << "输入新增数量: "; cin >> addCount;
+                if (backend.modifyBook(id, addCount)) cout << ">> 修改库存成功！\n";
+                else cout << ">> 修改失败，找不到该书号！\n";
+            }
+        }
+    }
+
+    void studentMenu() {
+        string currentUserId;
+        cout << "请输入您的学号进行登录: ";
+        cin >> currentUserId;
+
+        int choice;
+        while (true) {
+            printHeader("学生操作端 (当前用户: " + currentUserId + ")");
+            cout << "1. 查找书本\n";
+            cout << "2. 借阅书本\n";
+            cout << "3. 归还书本\n";
+            cout << "4. 智能图书推荐【新功能】\n";
+            cout << "0. 返回上级\n";
+            cout << "请选择: ";
+            cin >> choice;
+
+            if (choice == 0) break;
+
+            if (choice == 1) {
+                string id;
+                cout << "请输入要查找的书号: "; cin >> id;
+                Book* b = backend.searchBook(id);
+                if (b) {
+                    cout << "\n--- 图书信息 ---\n";
+                    cout << "书名: " << b->title << " | 作者: " << b->author 
+                         << " | 库存: " << b->currentStock << "/" << b->totalStock << "\n";
+                } else {
+                    cout << ">> 未找到该图书！\n";
+                }
+            }
+            else if (choice == 2) {
+                string id, date;
+                cout << "输入要借阅的书号: "; cin >> id;
+                cout << "输入今日日期(如20231025): "; cin >> date;
+                if (backend.borrowBook(currentUserId, id, date)) cout << ">> 借阅成功！请爱护图书。\n";
+                else cout << ">> 借阅失败，可能库存不足或查无此书。\n";
+            }
+            else if (choice == 3) {
+                string id;
+                cout << "输入要归还的书号: "; cin >> id;
+                if (backend.returnBook(currentUserId, id)) cout << ">> 归还成功！\n";
+                else cout << ">> 归还失败，检查书号是否正确。\n";
+            }
+            else if (choice == 4) { // 新增功能：前端调用后端推荐接口
+                cout << "\n>>> 正在为您生成个性化推荐单 <<<\n";
+                vector<Book> recs = backend.getRecommendations(3); // 获取前3本热点书
+                if(recs.empty()){
+                    cout << ">> 暂无推荐数据（图书馆太冷清啦，快去借书吧）\n";
+                } else {
+                    cout << "本校最受欢迎的图书Top3：\n";
+                    for (size_t i = 0; i < recs.size(); ++i) {
+                        cout << " [Top " << i+1 << "] 书名: 《" << recs[i].title 
+                             << "》 | 作者: " << recs[i].author 
+                             << " | 历史借阅次数: " << recs[i].borrowCount << "次\n";
+                    }
+                }
+            }
+        }
+    }
+};
+
+// ==========================================
+// 4. 主函数
+// ==========================================
+int main() {
+    // 解决控制台中文乱码问题
+    system("chcp 65001 > nul"); 
+    
+    FrontendUI ui;
+    ui.run();
+    return 0;
+}
